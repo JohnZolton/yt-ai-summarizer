@@ -1,24 +1,24 @@
 import os
 import json
-import datetime
 import subprocess
 import requests
 from bs4 import BeautifulSoup
 import whisper
 from playwright.sync_api import sync_playwright
-
+import yt_dlp
+import whisper
+from pathlib import Path
+from datetime import datetime
 
 # Configuration
 JSON_FILE = "youtube-subscriptions.json"
-DOWNLOAD_DIR = "downloads"  # Directory for downloaded videos
+DOWNLOAD_DIR = "audio_downloads"
 WHISPER_MODEL = "base"  # Whisper model to use (base, medium, large, etc.)
 BASE_YOUTUBE_URL = "https://www.youtube.com"
 
 
 def load_file(file_path: str):
     # Path to your JSON subscription file
-
-    # Open and load the JSON file
     try:
         with open(file_path, "r", encoding="utf-8") as file:
             youtube_subscriptions = json.load(file)
@@ -29,7 +29,7 @@ def load_file(file_path: str):
     except json.JSONDecodeError as e:
         print(f"Failed to decode JSON: {e}")
         
-def fetch_recent_videos(channel_id: str, channel_title: str):
+def check_channel_recent_videos(channel_id: str, channel_title: str):
     url = f"{BASE_YOUTUBE_URL}/channel/{channel_id}/videos"
     print(url)
     video_data = []
@@ -63,15 +63,69 @@ def fetch_recent_videos(channel_id: str, channel_title: str):
                 video_data.append({"title": video_title, "url": video_url, "time_ago": time_ago_text})
         browser.close()
         print(video_data)
+        return video_data
+
+def download_video(video_url: str, save_folder: str):
+    youtube_download_opts = {
+        'format': 'bestaudio/best',  # Get best quality audio
+        'extractaudio': True,  # Extract audio
+        'audioformat': 'mp3',  # Convert to mp3
+        'outtmpl': f'{save_folder}/%(title)s.%(ext)s',  # Control save path
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+    }
+    with yt_dlp.YoutubeDL(youtube_download_opts) as ydl:
+        ydl.download([video_url])
             
 
+def process_downloads(directory:str):
+    audio_dir = Path(directory)
+    
+    if not audio_dir.exists():
+        raise FileNotFoundError(f"Directory {directory} does not exist")
+    
+    # Create transcripts directory if it doesn't exist
+    transcripts_dir = Path("transcripts")
+    transcripts_dir.mkdir(exist_ok=True)
+
+    audio_files = list(audio_dir.glob("*.mp3"))
+    model = whisper.load_model("base")
+    for audio_file in audio_files:
+        print(f"transcribing: {audio_file}")
+        transcript_file = transcripts_dir / f"{audio_file.stem}_transcript.json"
+        
+        try:
+            result = model.transcribe(str(audio_file))
+            transcript_data = {
+                'filename': audio_file.name,
+                'transcription_date': datetime.now().isoformat(),
+                'text': result['text'],
+            }
+            with open(transcript_file, 'w', encoding='utf-8') as f:
+                json.dump(transcript_data, f, ensure_ascii=False, indent=2)
+        except Exception as e: 
+            print(f"Error processing {audio_file.name}: {str(e)}")
+        
+        
+
 data = load_file(JSON_FILE)
-videos_to_download = []
 
 test_channel_id="UCTq1zHztiV69Ur8t6jco4CQ"
 test_channel_name="S2 Underground"
 
-fetch_recent_videos(channel_id=test_channel_id, channel_title=test_channel_name)
+save_folder = "audio_downloads"
+#channel_videos = check_channel_recent_videos(channel_id=test_channel_id, channel_title=test_channel_name)
+
+#os.makedirs(save_folder, exist_ok=True)  # Create the directory if it doesn't exist
+
+#for video in channel_videos:
+#    download_video(video_url=video['url'], save_folder=save_folder)
+
+#process_downloads(directory=save_folder)
+    
 
 quit()
 for subscription in data:
