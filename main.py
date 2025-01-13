@@ -10,14 +10,8 @@ from datetime import datetime
 from anthropic import AnthropicBedrock
 from dotenv import load_dotenv
 from anthropic.types import ToolParam, MessageParam
+import argparse
 
-load_dotenv()
-
-# Configuration
-JSON_FILE = "youtube-subscriptions.json"
-DOWNLOAD_DIR = "audio_downloads"
-WHISPER_MODEL = "base"  # Whisper model to use (base, medium, large, etc.)
-BASE_YOUTUBE_URL = "https://www.youtube.com"
 
 
 def load_json_file(file_path: str):
@@ -32,8 +26,8 @@ def load_json_file(file_path: str):
     except json.JSONDecodeError as e:
         print(f"Failed to decode JSON: {e}")
         
-def check_channel_recent_videos(channel_id: str, channel_title: str):
-    url = f"{BASE_YOUTUBE_URL}/channel/{channel_id}/videos"
+def check_channel_recent_videos(channel_id: str, channel_title: str, youtube_url:str):
+    url = f"{youtube_url}/channel/{channel_id}/videos"
     print(url)
     video_data = []
     
@@ -84,7 +78,7 @@ def download_video(video_url: str, save_folder: str):
         ydl.download([video_url])
             
 
-def process_downloads(directory:str):
+def transcribe_downloads(directory:str):
     audio_dir = Path(directory)
     
     if not audio_dir.exists():
@@ -114,22 +108,8 @@ def process_downloads(directory:str):
         
         
 
-data = load_json_file(JSON_FILE)
 
-test_channel_id="UCTq1zHztiV69Ur8t6jco4CQ"
-test_channel_name="S2 Underground"
-
-save_folder = "audio_downloads"
-#channel_videos = check_channel_recent_videos(channel_id=test_channel_id, channel_title=test_channel_name)
-
-#os.makedirs(save_folder, exist_ok=True)  # Create the directory if it doesn't exist
-
-#for video in channel_videos:
-#    download_video(video_url=video['url'], save_folder=save_folder)
-
-#process_downloads(directory=save_folder)
-
-def summarize_transcript(text: str, client):
+def summarize_transcript(transcript_text: str, client):
     model_name=os.getenv("BEDROCK_AWS_MODEL")
 
     user_prompt=f"Summarize this transcript, highlight any key details. \n\n transcript: {transcript_text}"
@@ -174,44 +154,72 @@ def summarize_transcript(text: str, client):
     )
     return message.content[0].text
 
-def save_summary(summary_text: str, file_name:str):
+def save_summary(summary_text: str, file_name:str, summaries_path: str):
     # Create the summaries directory if it doesn't exist
     if not os.path.exists(summaries_path):
         os.makedirs(summaries_path)
-    summary_filename = os.path.splitext(filename)[0] + "_summary.txt"
+    summary_filename = os.path.splitext(file_name)[0] + "_summary.txt"
     summary_path = os.path.join(summaries_path, summary_filename)
     
     # Write the summary to a file in the summaries directory
     with open(summary_path, 'w', encoding='utf-8') as summary_file:
-        summary_file.write(summary)
+        summary_file.write(summary_text)
     
     print(f"Summary written to: {summary_path}")    
 
-folder_path = "transcripts"
-summaries_path = "summaries"
 
-client = AnthropicBedrock()
-
-if os.path.exists(folder_path) and os.path.isdir(folder_path):
-    for filename in os.listdir(folder_path):
-        file_path = os.path.join(folder_path, filename)
-        if os.path.isfile(file_path):
-            print(f"processing file: {filename}")
-            data = load_json_file(f"{folder_path}/{filename}")
-            transcript_text = data["text"]
-            summary = summarize_transcript(text=transcript_text, client=client)
-            save_summary(summary_text=summary, file_name=filename)
             
-            
+def main():
+    parser = argparse.ArgumentParser(description="Process YouTube channel videos")
+    parser.add_argument("--test", action="store_true", help="Run in test mode with a single channel")
+    args = parser.parse_args()
 
-"""
-for subscription in data:
-    channel_id = subscription["snippet"]["channelId"]
-    channel_title = subscription["snippet"]["title"]
-    print(f"checking channel: {channel_title}")
+    load_dotenv()
 
-    recent_videos = fetch_recent_videos(channel_id)
+    # Configuration
+    JSON_FILE = "youtube-subscriptions.json"
+    DOWNLOAD_DIR = "audio_downloads"
+    WHISPER_MODEL = "base"
+    BASE_YOUTUBE_URL = "https://www.youtube.com"
+
+    data = load_json_file(JSON_FILE)
+
+    test_channel_id="UCTq1zHztiV69Ur8t6jco4CQ"
+    test_channel_name="S2 Underground"
+
+    save_folder = "audio_downloads"
+    folder_path = "transcripts"
+    summaries_path = "summaries"
+
+    client = AnthropicBedrock()
     
-    for video in recent_videos:
-        print(f"found recent video: {video['title'] ({video['url']})}")
-"""
+    if args.test:
+        channels = [{"id": test_channel_id, "name": test_channel_name}]
+    else:
+        channels = data["channels"] 
+    
+    for channel in channels:
+        channel_id = channel["id"]
+        channel_name = channel["name"]
+        print(f"Processing channel: {channel_name}")
+
+        channel_videos = check_channel_recent_videos(channel_id=channel_id, channel_title=channel_name, youtube_url=BASE_YOUTUBE_URL)
+
+        for video in channel_videos:
+            download_video(video_url=video['url'], save_folder=save_folder)
+
+        transcribe_downloads(directory=save_folder)
+    
+    if os.path.exists(folder_path) and os.path.isdir(folder_path):
+        for filename in os.listdir(folder_path):
+            file_path = os.path.join(folder_path, filename)
+            if os.path.isfile(file_path):
+                print(f"summarizing: {filename}")
+                transcript_data = load_json_file(file_path)
+                transcript_text = transcript_data["text"]
+                summary = summarize_transcript(transcript_text=transcript_text, client=client)
+                print(f"saving: {filename}")
+                save_summary(summary_text=summary, file_name=filename, summaries_path=summaries_path)
+    
+if __name__ == "__main__":
+    main()
