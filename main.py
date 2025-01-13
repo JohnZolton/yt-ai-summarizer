@@ -1,14 +1,17 @@
 import os
 import json
-import subprocess
 import requests
 from bs4 import BeautifulSoup
-import whisper
 from playwright.sync_api import sync_playwright
 import yt_dlp
 import whisper
 from pathlib import Path
 from datetime import datetime
+from anthropic import AnthropicBedrock
+from dotenv import load_dotenv
+from anthropic.types import ToolParam, MessageParam
+
+load_dotenv()
 
 # Configuration
 JSON_FILE = "youtube-subscriptions.json"
@@ -17,7 +20,7 @@ WHISPER_MODEL = "base"  # Whisper model to use (base, medium, large, etc.)
 BASE_YOUTUBE_URL = "https://www.youtube.com"
 
 
-def load_file(file_path: str):
+def load_json_file(file_path: str):
     # Path to your JSON subscription file
     try:
         with open(file_path, "r", encoding="utf-8") as file:
@@ -111,7 +114,7 @@ def process_downloads(directory:str):
         
         
 
-data = load_file(JSON_FILE)
+data = load_json_file(JSON_FILE)
 
 test_channel_id="UCTq1zHztiV69Ur8t6jco4CQ"
 test_channel_name="S2 Underground"
@@ -125,9 +128,83 @@ save_folder = "audio_downloads"
 #    download_video(video_url=video['url'], save_folder=save_folder)
 
 #process_downloads(directory=save_folder)
-    
 
-quit()
+def summarize_transcript(text: str, client):
+    model_name=os.getenv("BEDROCK_AWS_MODEL")
+
+    user_prompt=f"Summarize this transcript, highlight any key details. \n\n transcript: {transcript_text}"
+    
+    """
+    user_prompt=f"get a summary of this document, use available tools if necessary: {video_text}"
+    tools: list[ToolParam] = [
+        {
+            "name": "summarize_document",
+            "description": "provides an accurate and detailed summary of text",
+            "input_schema": {
+                "type": "object",
+                "properties": {"text": {"type": "string", "description": "the text to summarize"}},
+            }
+        }
+    ]
+    """
+    """ # Model tried to call the tool AND regenerate the entire input text in the tool call, replaced with above to just output a call-tool flag
+    tools: list[ToolParam] = [
+        {
+            "name": "summarize_document",
+            "description": "provides an accurate and detailed summary of text",
+            "input_schema": {
+                "type": "object",
+                "properties": {"call": {"type": "boolean", "description": "decision to call summarize_document"}},
+            }
+        }
+    ]
+
+    """
+
+    message = client.messages.create(
+        max_tokens=1024,
+        messages = [
+            {
+                "role": "user",
+                "content": user_prompt
+            }
+        ],
+        model=model_name,
+        #tools=tools
+    )
+    return message.content[0].text
+
+def save_summary(summary_text: str, file_name:str):
+    # Create the summaries directory if it doesn't exist
+    if not os.path.exists(summaries_path):
+        os.makedirs(summaries_path)
+    summary_filename = os.path.splitext(filename)[0] + "_summary.txt"
+    summary_path = os.path.join(summaries_path, summary_filename)
+    
+    # Write the summary to a file in the summaries directory
+    with open(summary_path, 'w', encoding='utf-8') as summary_file:
+        summary_file.write(summary)
+    
+    print(f"Summary written to: {summary_path}")    
+
+folder_path = "transcripts"
+summaries_path = "summaries"
+
+client = AnthropicBedrock()
+
+if os.path.exists(folder_path) and os.path.isdir(folder_path):
+    for filename in os.listdir(folder_path):
+        file_path = os.path.join(folder_path, filename)
+        if os.path.isfile(file_path):
+            print(f"processing file: {filename}")
+            data = load_json_file(f"{folder_path}/{filename}")
+            transcript_text = data["text"]
+            summary = summarize_transcript(text=transcript_text, client=client)
+            save_summary(summary_text=summary, file_name=filename)
+            
+            
+
+"""
 for subscription in data:
     channel_id = subscription["snippet"]["channelId"]
     channel_title = subscription["snippet"]["title"]
@@ -137,4 +214,4 @@ for subscription in data:
     
     for video in recent_videos:
         print(f"found recent video: {video['title'] ({video['url']})}")
-
+"""
